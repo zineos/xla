@@ -30,3 +30,4 @@ tools/python_bin_path.sh
 *.user
 irregular_tiling
 arbitrary_irregular
+tensor_core_scheduler
