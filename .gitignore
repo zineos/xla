@@ -29,3 +29,4 @@ tools/python_bin_path.sh
 *.suo
 *.user
 irregular_tiling
+arbitrary_irregular
