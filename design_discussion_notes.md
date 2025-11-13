@@ -447,28 +447,161 @@ def NPU_ExecuteBatchOp : NPU_Op<"execute_batch"> {
 
 ## 决策汇总表
 
-请填写下面的表格，我会根据你的反馈调整设计：
+✅ = 已确认 | ⏳ = 待定
 
-| 问题 | 你的选择 | 理由/备注 |
-|------|---------|----------|
-| **1. 使用NPU Dialect?** | [ ] 是 [ ] 否 | |
-| **2. 调度策略** | [ ] 3种 [ ] 仅Optimized [ ] 其他 | |
-| **3. 硬件编程模型** | [ ] A [ ] B [ ] C [ ] D | |
-| **4. Tile数据布局** | [ ] AoS [ ] SoA [ ] Descriptor | |
-| **5. 不完整Tile处理** | [ ] Mask [ ] Padding [ ] 变长 | |
-| **6. 动态Shape支持** | [ ] 不需要 [ ] 部分 [ ] 完全 | |
-| **7. 多Operation优先级** | Conv:[ ] Elem:[ ] Reduce:[ ] | |
-| **8. Tile不足时** | [ ] NOP [ ] 报错 [ ] 降级 | |
-| **9. Tile过多时** | [ ] Batch [ ] 报错 [ ] 智能选 | |
-| **10. 首要性能目标** | [ ] 吞吐 [ ] 延迟 [ ] 能效 | |
+| 问题 | 你的选择 | 理由/备注 | 状态 |
+|------|---------|----------|------|
+| **硬件执行模型** | 真并行（16独立单元） | 同时计算16个tile | ✅ |
+| **1. 使用NPU Dialect?** | 是 | 硬件语义明确，易扩展 | ✅ |
+| **2. 调度策略** | 仅Optimized | 统一最优策略 | ✅ |
+| **3. 硬件编程模型** | **C. 自定义ISA** | 类似TPU | ✅ |
+| **4. Tile数据布局** | Descriptor表 | 与TPU一致 | ✅ |
+| **5. 不完整Tile处理** | **C. 变长Tile** | 硬件原生支持 | ✅ |
+| **内存架构** | DDR → DMA → Buffer → NPU | TPU-like | ✅ |
+| **6. 动态Shape支持** | 编译时静态（Phase 1） | 后续可扩展 | ✅ |
+| **7. 多Operation优先级** | MatMul first | Conv/Elem后续 | ✅ |
+| **8. Tile不足时** | NOP填充 | 保持16 tile数量 | ⏳ |
+| **9. Tile过多时** | 智能选择最优16个 | Optimized策略 | ✅ |
+| **10. 首要性能目标** | 最大化吞吐量 | 并行利用率 | ⏳ |
+
+---
+
+## 已确认的架构详情
+
+### 硬件架构（TPU-like）
+
+```
+┌─────────────────────────────────────────────────────┐
+│                    Host CPU                          │
+└────────────┬────────────────────────────────────────┘
+             │ PCIe / High-speed bus
+┌────────────▼────────────────────────────────────────┐
+│                    DDR Memory                        │
+│  (存储输入矩阵、输出结果、Tile Descriptors)            │
+└────────────┬────────────────────────────────────────┘
+             │ DMA Engine (高带宽传输)
+┌────────────▼────────────────────────────────────────┐
+│               On-chip Buffer                         │
+│  (暂存16个tiles，类似TPU的Unified Buffer)             │
+│  Size: ~16KB (16 tiles × 16×16 × 4 bytes)           │
+└─────────┬──────────────────────────────────┬────────┘
+          │                                  │
+    ┌─────▼─────┐                      ┌─────▼─────┐
+    │ Tile 0-7  │                      │ Tile 8-15 │
+    └─────┬─────┘                      └─────┬─────┘
+          │                                  │
+┌─────────▼──────────────────────────────────▼────────┐
+│           16-way Parallel NPU Cores                  │
+│  ┌─────┐ ┌─────┐ ┌─────┐       ┌─────┐             │
+│  │Core0│ │Core1│ │Core2│  ...  │Core15│            │
+│  └─────┘ └─────┘ └─────┘       └─────┘             │
+│  每个Core: 16×16 MAC阵列，独立执行                    │
+└──────────────────────────────────────────────────────┘
+```
+
+### 关键特性确认
+
+1. **真并行执行**：16个NPU Core同时计算，无依赖
+   - 优势：调度顺序不影响正确性
+   - 优化重点：最小化padding，最大化计算利用率
+
+2. **变长Tile支持**：硬件原生支持不规则tile
+   ```
+   Tile可以是：16×16, 16×13, 7×16, 5×8, 等任意大小
+   硬件自动处理边界，无需软件padding
+   ```
+
+3. **自定义ISA**：需要生成NPU专用指令
+   ```asm
+   npu.dma.load  desc_table, 16_tiles
+   npu.exec.matmul  desc_table
+   npu.dma.store desc_table, result
+   ```
+
+4. **Descriptor Table布局**（类似TPU）
+   ```cpp
+   struct TileDescriptor {
+     uint64_t src_addr;      // DDR地址
+     uint16_t k_size;        // 实际K维度
+     uint16_t n_size;        // 实际N维度
+     uint16_t k_offset;      // 矩阵内偏移
+     uint16_t n_offset;
+     uint8_t  core_id;       // 分配到哪个core (0-15)
+     uint8_t  flags;         // NOP, Last, etc.
+   };
+
+   struct BatchDescriptor {
+     TileDescriptor tiles[16];
+     uint32_t operation;     // MATMUL, CONV, etc.
+     uint32_t batch_id;
+   };
+   ```
+
+### 调度策略（基于并行特性优化）
+
+**因为是真并行，所以排序关键指标仅需考虑**：
+
+```cpp
+struct TileCandidate {
+  // 主要指标：padding最小化
+  float padding_ratio = 1.0f - (k_size * n_size) / (16.0f * 16.0f);
+
+  // 次要指标（可选）：
+  // - 同矩阵tile聚集（便于硬件预取）
+  // - K维度对齐（便于后续accumulate）
+};
+
+// 排序规则
+bool operator<(const TileCandidate& other) const {
+  return padding_ratio < other.padding_ratio;  // 完整tile优先
+}
+```
+
+**不需要考虑的因素**（因为是真并行）：
+- ❌ 执行顺序依赖
+- ❌ SIMD分支惩罚
+- ❌ 流水线气泡
+- ❌ Warp divergence
+
+### Lowering路径
+
+```
+MLIR NPU Dialect
+    ↓
+LLVM IR (with intrinsics)
+    ↓
+NPU Backend (Custom)
+    ↓
+NPU Assembly (.npu.s)
+    ↓
+NPU Object Code (.npu.o)
+    ↓
+Linker
+    ↓
+NPU Executable (.npu.bin)
+```
+
+关键Intrinsics需要定义：
+```llvm
+; LLVM IR intrinsics
+declare void @llvm.npu.dma.load(i8* %desc, i32 %num_tiles)
+declare void @llvm.npu.exec.batch(i8* %desc, i32 %op_type)
+declare void @llvm.npu.dma.store(i8* %desc, i32 %num_tiles)
+```
 
 ---
 
 ## 下一步行动
 
-根据你的反馈，我会：
-1. 调整设计文档
-2. 创建refined版本的设计方案
-3. 开始Phase 1实现
+✅ **架构确认完成！现在可以开始实现。**
 
-**请逐个问题回答，或者告诉我你最关心的几个问题，我们先深入讨论那些！**
+根据确认的架构，我会：
+1. ✅ 更新设计文档（反映TPU-like架构）
+2. ⏳ 创建refined版本的NPU Dialect定义
+3. ⏳ 开始Phase 1实现：
+   - TableGen定义（npu_ops.td, npu_passes.td）
+   - Pass框架（npu_tile_scheduler_pass.cpp）
+   - 调度算法（基于padding最小化）
+4. ⏳ 定义Lowering路径（NPU Dialect → LLVM IR）
+
+**接下来我会创建refined架构文档，然后开始Phase 1实现。**
