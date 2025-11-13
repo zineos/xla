@@ -28,3 +28,4 @@ tools/python_bin_path.sh
 *.VC.opendb
 *.suo
 *.user
+irregular_tiling
