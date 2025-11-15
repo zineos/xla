@@ -1,0 +1,36 @@
+hardware:
+  name: "GPU-TensorCore-A100"
+  type: "gpu"
+  vendor: "nvidia"
+  version: "ampere"
+
+compute:
+  batch_size: 32  # Warp size
+  tile_size: [16, 16, 16]  # Tensor Core tile size
+  must_fill_batch: false
+  supports_variable_tiles: false
+  supports_mixed_precision: true
+  supported_dtypes: ["float16", "bfloat16", "float32", "tf32", "int8"]
+  compute_throughput: 19.5  # TFLOPS (FP16)
+
+memory:
+  on_chip_buffer: 167936  # 164KB shared memory per SM
+  l2_cache: 41943040  # 40MB L2 cache
+  ddr_bandwidth: 1555.0  # GB/s (HBM2)
+  dma_channels: 1
+  double_buffer: true
+
+optimization:
+  default_algorithm: "auto"
+  cp_sat_time_limit: 5.0
+  cp_sat_enabled_threshold: 32
+  greedy_threshold: 500
+  enable_multi_matmul_fusion: true
+  enable_k_reduction_grouping: false  # GPU handles in hardware
+
+# GPU-specific extensions
+vendor_extensions:
+  sm_count: 108
+  warp_scheduler: "dual_issue"
+  async_copy: true
+  tensor_memory_accelerator: true

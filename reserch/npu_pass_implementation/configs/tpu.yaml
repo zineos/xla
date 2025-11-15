@@ -1,0 +1,36 @@
+hardware:
+  name: "TPU-v4"
+  type: "tpu"
+  vendor: "google"
+  version: "v4"
+
+compute:
+  batch_size: 128
+  tile_size: [128, 128, 128]
+  must_fill_batch: false
+  supports_variable_tiles: false
+  supports_mixed_precision: true
+  supported_dtypes: ["bfloat16", "float32", "int8"]
+  compute_throughput: 275.0  # TFLOPS (BF16)
+
+memory:
+  on_chip_buffer: 16777216  # 16MB vector memory
+  l2_cache: null
+  ddr_bandwidth: 1200.0  # GB/s (HBM)
+  dma_channels: 4
+  double_buffer: true
+
+optimization:
+  default_algorithm: "greedy"
+  cp_sat_time_limit: 2.0
+  cp_sat_enabled_threshold: 10
+  greedy_threshold: 100
+  enable_multi_matmul_fusion: false  # TPU compiler handles this
+  enable_k_reduction_grouping: false
+
+# TPU-specific extensions
+vendor_extensions:
+  systolic_array_size: 128
+  matrix_unit_count: 2
+  xla_optimized: true
+  interconnect_bandwidth: 4800.0  # GB/s

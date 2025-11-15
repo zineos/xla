@@ -1,0 +1,36 @@
+hardware:
+  name: "NPU-16-Custom"
+  type: "npu"
+  vendor: "custom"
+  version: "1.0"
+
+compute:
+  batch_size: 16
+  tile_size: [16, 16, 16]
+  must_fill_batch: true
+  supports_variable_tiles: true
+  supports_mixed_precision: false
+  supported_dtypes: ["float32"]
+  compute_throughput: 0.5  # TFLOPS
+
+memory:
+  on_chip_buffer: 16384  # 16KB
+  l2_cache: null
+  ddr_bandwidth: 50.0  # GB/s
+  dma_channels: 2
+  double_buffer: true
+
+optimization:
+  default_algorithm: "auto"
+  cp_sat_time_limit: 10.0
+  cp_sat_enabled_threshold: 100
+  greedy_threshold: 1000
+  enable_multi_matmul_fusion: true
+  enable_k_reduction_grouping: true
+
+# NPU-specific extensions
+vendor_extensions:
+  descriptor_table_size: 256
+  support_nop_filling: true
+  k_loop_unrolling: true
+  max_k_iterations: 32
